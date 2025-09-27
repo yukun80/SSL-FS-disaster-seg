@@ -54,6 +54,8 @@ def get_aug(which_aug, input_size):
         return get_sabs_aug(input_size)
     elif which_aug == 'aug_v3':
         return get_sabs_augv3(input_size)
+    elif which_aug == 'satellite_aug':
+        return get_satellite_aug(input_size)
     else:
         raise NotImplementedError
 
@@ -141,6 +143,23 @@ def get_intensity_transformer(aug):
     return functools.partial(gamma_transform, aug=aug)
 
 
+def get_satellite_aug(input_size):
+    """Augmentation preset tuned for overhead RGB imagery."""
+    return {
+        'flip': {'v': True, 'h': True, 't': False, 'p': 0.5},
+        'affine': {
+            'rotate': 45,
+            'shift': (32, 32),
+            'shear': 10,
+            'scale': (0.8, 1.2),
+        },
+        'elastic': {'alpha': 5, 'sigma': 3},
+        'patch': input_size,
+        'reduce_2d': True,
+        'gamma_range': (0.8, 1.2),
+    }
+
+
 def transform_with_label(aug):
     """
     Doing image geometric transform
@@ -221,4 +240,3 @@ def transform(scan, label, nclass, geometric_tfx, intensity_tfx):
 
 def transform_wrapper(scan, label, nclass, geometric_tfx, intensity_tfx):
     return transform(scan, label, nclass, geometric_tfx, intensity_tfx)
-

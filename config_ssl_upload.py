@@ -38,8 +38,8 @@ def cfg():
     do_validation=False
     num_workers = 4 # 0 for debugging. 
 
-    dataset = 'CHAOST2_Superpix' # i.e. abdominal MRI
-    use_coco_init = True # initialize backbone with MS_COCO initialization. Anyway coco does not contain medical images
+    dataset = 'POTSDAM_BIJIE'  # remote-sensing landslide dataset
+    use_coco_init = False  # hub backbones already self-supervised
 
     ### Training
     n_steps = 100100
@@ -51,14 +51,14 @@ def cfg():
     save_snapshot_every = 25000
     max_iters_per_load = 1000 # epoch size, interval for reloading the dataset
     epochs=1
-    scan_per_load = -1 # numbers of 3d scans per load for saving memory. If -1, load the entire dataset to the memory
-    which_aug = 'sabs_aug' # standard data augmentation with intensity and geometric transforms
-    input_size = (IMG_SIZE, IMG_SIZE)
-    min_fg_data='100' # when training with manual annotations, indicating number of foreground pixels in a single class single slice. This empirically stablizes the training process
-    label_sets = 0 # which group of labels taking as training (the rest are for testing)
-    curr_cls = "" # choose between rk, lk, spleen and liver
-    exclude_cls_list = [2, 3] # testing classes to be excluded in training. Set to [] if testing under setting 1
-    usealign = True # see vanilla PANet
+    scan_per_load = -1
+    which_aug = 'satellite_aug'
+    input_size = (512, 512)
+    min_fg_data='0'
+    label_sets = 0
+    curr_cls = ""
+    exclude_cls_list = []
+    usealign = True # keep prototype alignment loss
     use_wce = True
     use_dinov2_loss = False
     dice_loss = False
@@ -74,12 +74,12 @@ def cfg():
     debug=False
     skip_no_organ_slices=True
     # Network
-    modelname = 'dlfcn_res101' # resnet 101 backbone from torchvision fcn-deeplab
+    modelname = 'dinov3_vits16'
     encodername='default' # relevant to Mask2Former
-    clsname = None # 
+    clsname = 'grid_proto'
     reload_model_path = None # path for reloading a trained model (overrides ms-coco initialization)
     proto_grid_size = 8 # L_H, L_W = (32, 32) / 8 = (4, 4)  in training
-    feature_hw = [input_size[0]//8, input_size[0]//8] # feature map size, should couple this with backbone in future
+    feature_hw = [max(input_size[0] // 16, 32), max(input_size[0] // 16, 32)]
     lora = 0
     use_3_slices=False
     do_cca=False
@@ -96,7 +96,11 @@ def cfg():
     # SSL
     superpix_scale = 'MIDDLE' #MIDDLE/ LARGE
     use_pos_enc=False
-    support_txt_file = None # path to a txt file containing support slices
+    support_txt_file = None # optional path listing support tile ids (one per line)
+    support_id_whitelist = None
+    if support_txt_file is not None and os.path.isfile(support_txt_file):
+        with open(support_txt_file, 'r', encoding='utf-8') as f:
+            support_id_whitelist = [line.strip() for line in f if line.strip()]
     augment_support_set=False
     coarse_pred_only=False # for ProtoSAM 
     point_mode="both" # for ProtoSAM, choose: both, conf, centroid
@@ -149,28 +153,8 @@ def cfg():
 
     path = {
         'log_dir': './runs',
-        'SABS':{'data_dir': "./data/SABS/sabs_CT_normalized"
-            },
-        'SABS_448':{'data_dir': "./data/SABS/sabs_CT_normalized_448"
-            },
-        'SABS_672':{'data_dir': "./data/SABS/sabs_CT_normalized_672"
-            },
-        'C0':{'data_dir': "feed your dataset path here"
-            },
-        'CHAOST2':{'data_dir': "./data/CHAOST2/chaos_MR_T2_normalized/"
-            },
-        'CHAOST2_672':{'data_dir': "./data/CHAOST2/chaos_MR_T2_normalized_672/"
-            },
-        'BRATS2021:': {'data_dir': "./data/BRATS/BRATS_T2_normalized/"},
-        'LITS17': {'data_dir': "./data/LITS17/lits17_CT_normalized/"},
-        'SABS_Superpix':{'data_dir': "./data/SABS/sabs_CT_normalized"},
-        'C0_Superpix':{'data_dir': "feed your dataset path here"},
-        'CHAOST2_Superpix':{'data_dir': "./data/CHAOST2/chaos_MR_T2_normalized/"},
-        'CHAOST2_Superpix_672':{'data_dir': "./data/CHAOST2/chaos_MR_T2_normalized_672/"},
-        'SABS_Superpix_448':{'data_dir': "./data/SABS/sabs_CT_normalized_448"},
-        'SABS_Superpix_672':{'data_dir': "./data/SABS/sabs_CT_normalized_672"},
-        'LITS17_Superpix':{'data_dir': "./data/LITS17/lits17_CT_normalized"},
-        }
+        'POTSDAM_BIJIE': {'data_dir': './data/potsdam_bijie'},
+    }
 
 
 @ex.config_hook

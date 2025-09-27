@@ -16,7 +16,12 @@ try:
 
     safetensors_available = True
 except ImportError:
-    from .safe_open import safe_open
+    safetensors_available = False
+
+    def safe_open(*args, **kwargs):
+        raise EnvironmentError(
+            "Reading safetensors requires the safetensors package. Install it with `pip install safetensors`."
+        )
 
     def safe_save(
         tensors: Dict[str, torch.Tensor],
@@ -26,8 +31,6 @@ except ImportError:
         raise EnvironmentError(
             "Saving safetensors requires the safetensors library. Please install with pip or similar."
         )
-
-    safetensors_available = False
 
 
 class LoraInjectedLinear(nn.Module):

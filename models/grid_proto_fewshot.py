@@ -1,7 +1,6 @@
 """
 ALPNet
 """
-import math
 from pathlib import Path
 
 import torch
@@ -9,7 +8,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .alpmodule import MultiProtoAsConv
-from .backbone.torchvision_backbones import TVDeeplabRes101Encoder
 from models.slices_to_image_adapter import SliceToImageAdapter
 from util.consts import DEFAULT_FEATURE_SIZE
 from util.lora import inject_trainable_lora
@@ -86,14 +84,7 @@ class FewShotSeg(nn.Module):
         backbone_name = self.config['which_model']
         self.config['feature_hw'] = [DEFAULT_FEATURE_SIZE, DEFAULT_FEATURE_SIZE]
 
-        if backbone_name in {'dlfcn_res101', 'default'}:
-            self.patch_size = 8
-            use_coco_init = self.config['use_coco_init']
-            self.encoder = TVDeeplabRes101Encoder(use_coco_init)
-            self.config['feature_hw'] = [
-                math.ceil(self.image_size / 8), math.ceil(self.image_size / 8)
-            ]
-        elif backbone_name == 'dinov2_l14':
+        if backbone_name == 'dinov2_l14':
             self.patch_size = 14
             self.encoder = torch.hub.load('facebookresearch/dinov2', 'dinov2_vitl14')
             _update_feature_hw_from_patch(self.patch_size)
@@ -143,9 +134,7 @@ class FewShotSeg(nn.Module):
 
     def get_features(self, imgs_concat):
         backbone_name = self.config['which_model']
-        if backbone_name == 'dlfcn_res101':
-            img_fts = self.encoder(imgs_concat, low_level=False)
-        elif 'dino' in backbone_name:
+        if 'dino' in backbone_name:
             if not self.patch_size:
                 raise ValueError('Patch size must be set for DINO-style backbones.')
             target_tokens = max(self.image_size // self.patch_size, 1)
@@ -174,7 +163,7 @@ class FewShotSeg(nn.Module):
         else:
             raise NotImplementedError(
                 f'Backbone network {backbone_name} not implemented')
-        
+
         return img_fts
 
     def get_cls(self):
@@ -182,6 +171,9 @@ class FewShotSeg(nn.Module):
         Obtain the similarity-based classifier
         """
         proto_hw = self.config["proto_grid_size"]
+
+        if self.config.get('cls_name') is None:
+            self.config['cls_name'] = 'grid_proto'
 
         if self.config['cls_name'] == 'grid_proto':
             embed_dim = 256

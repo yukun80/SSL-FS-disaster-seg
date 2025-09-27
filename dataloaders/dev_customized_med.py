@@ -8,7 +8,7 @@ import torch
 import numpy as np
 
 from dataloaders.common import ReloadPairedDataset, ValidationDataset
-from dataloaders.ManualAnnoDatasetv2 import ManualAnnoDataset
+from dataloaders.satellite_dataset import SatelliteFewShotDataset
 
 def attrib_basic(_sample, class_id):
     """
@@ -93,7 +93,10 @@ def fewshot_pairing(paired_sample, n_ways, n_shots, cnt_query, coco=False, mask_
         support_insts = [[paired_sample[cumsum_idx[i] + j]['inst'] for j in range(n_shots)]
                          for i in range(n_ways)]
     else:
-        support_insts = []
+        support_scribbles = [[np.empty((0,), dtype=np.float32) for _ in range(n_shots)]
+                             for _ in range(n_ways)]
+        support_insts = [[np.empty((0,), dtype=np.float32) for _ in range(n_shots)]
+                         for _ in range(n_ways)]
 
     # query images, masks and class indices
     query_images = [paired_sample[cumsum_idx[i+1] - j - 1]['image'] for i in range(n_ways)
@@ -185,12 +188,17 @@ def med_fewshot(dataset_name, base_dir, idx_split, mode, scan_per_load,
         fix_parent_len:
             fixed length of the parent dataset
     """
-    med_set = ManualAnnoDataset
+    if dataset_name != 'POTSDAM_BIJIE':
+        raise ValueError(f"Unsupported dataset '{dataset_name}' for satellite pipeline")
 
-
-    mydataset = med_set(which_dataset = dataset_name, base_dir=base_dir, idx_split = idx_split, mode = mode,\
-         scan_per_load = scan_per_load, transforms=transforms, min_fg = min_fg, fix_length = fix_parent_len,\
-         exclude_list = exclude_list, **kwargs)
+    mydataset = SatelliteFewShotDataset(
+        dataset_name=dataset_name,
+        base_dir=base_dir,
+        split=mode,
+        transforms=transforms,
+        scan_per_load=scan_per_load,
+        support_id_whitelist=kwargs.get('support_id_whitelist'),
+    )
 
     mydataset.add_attrib('basic', attrib_basic, {})
 
@@ -242,7 +250,17 @@ def med_fewshot_val(dataset_name, base_dir, idx_split, scan_per_load, act_labels
         npart: number of chunks for splitting a 3d volume
         nsup:  number of support scans, equivalent to nshot
     """
-    mydataset = ManualAnnoDataset(which_dataset = dataset_name, base_dir=base_dir, idx_split = idx_split, mode = mode, scan_per_load = scan_per_load, transforms=transforms, min_fg = 1, fix_length = fix_length, nsup = nsup, **kwargs)
+    if dataset_name != 'POTSDAM_BIJIE':
+        raise ValueError(f"Unsupported dataset '{dataset_name}' for satellite pipeline")
+
+    mydataset = SatelliteFewShotDataset(
+        dataset_name=dataset_name,
+        base_dir=base_dir,
+        split=mode,
+        transforms=transforms,
+        scan_per_load=scan_per_load,
+        support_id_whitelist=kwargs.get('support_id_whitelist'),
+    )
     mydataset.add_attrib('basic', attrib_basic, {})
 
     valset = ValidationDataset(mydataset, test_classes = act_labels, npart = npart)

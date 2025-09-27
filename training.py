@@ -1,243 +1,219 @@
+"""Training entry point for remote-sensing few-shot segmentation.
+
+遥感小样本分割训练脚本入口点。
+
+Example:
+    python training.py with dataset='POTSDAM_BIJIE' task.n_shots=1 n_steps=2000
 """
-Training the model
-Extended from original implementation of ALPNet.
-"""
-from scipy.ndimage import distance_transform_edt as eucl_distance
+
+from __future__ import annotations
+
 import os
 import shutil
+from typing import Tuple
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim
 from torch.utils.data import DataLoader
 from torch.optim.lr_scheduler import MultiStepLR
-import numpy as np
-from models.grid_proto_fewshot import FewShotSeg
 from torch.utils.tensorboard import SummaryWriter
+from tqdm.auto import tqdm
+
+from models.grid_proto_fewshot import FewShotSeg
 from dataloaders.dev_customized_med import med_fewshot
-from dataloaders.GenericSuperDatasetv2 import SuperpixelDataset
 import dataloaders.augutils as myaug
 
-from util.utils import set_seed, t2n, to01, compose_wt_simple
-from util.metric import Metric
-
+from util.utils import set_seed, compose_wt_simple
 from config_ssl_upload import ex
-from tqdm.auto import tqdm
-# import Tensor
-from torch import Tensor
-from typing import List, Tuple, Union, cast, Iterable, Set, Any, Callable, TypeVar
-
-def get_dice_loss(prediction: torch.Tensor, target: torch.Tensor, smooth=1.0):
-    '''
-    prediction: (B, 1, H, W)
-    target: (B, H, W)
-    '''
-    if prediction.shape[1] > 1:
-        # use only the foreground prediction
-        prediction = prediction[:, 1, :, :]
-    prediction = torch.sigmoid(prediction)
-    intersection = (prediction * target).sum(dim=(-2, -1))
-    union = prediction.sum(dim=(-2, -1)) + target.sum(dim=(1, 2)) + smooth
-
-    dice = (2.0 * intersection + smooth) / union
-    dice_loss = 1.0 - dice.mean()
-
-    return dice_loss
 
 
 def get_train_transforms(_config):
-    tr_transforms = myaug.transform_with_label(
-        {'aug': myaug.get_aug(_config['which_aug'], _config['input_size'][0])})
-    return tr_transforms
+    """根据配置构建训练阶段的数据增强流水线。"""
 
-    
-def get_dataset_base_name(data_name):
-    if data_name == 'SABS_Superpix':
-        baseset_name = 'SABS'
-    elif data_name == 'C0_Superpix':
-        raise NotImplementedError
-        baseset_name = 'C0'
-    elif data_name == 'CHAOST2_Superpix':
-        baseset_name = 'CHAOST2'
-    elif data_name == 'CHAOST2_Superpix_672':
-        baseset_name = 'CHAOST2'
-    elif data_name == 'SABS_Superpix_448':
-        baseset_name = 'SABS'
-    elif data_name == 'SABS_Superpix_672':
-        baseset_name = 'SABS'
-    elif 'lits' in data_name.lower():
-        baseset_name = 'LITS17'
-    else:
-        raise ValueError(f'Dataset: {data_name} not found')
+    # 使用自定义的增强模块，根据配置中指定的增强策略以及输入尺寸构建图像增强流程。
+    return myaug.transform_with_label({"aug": myaug.get_aug(_config["which_aug"], _config["input_size"][0])})
 
-    return baseset_name
 
-def get_nii_dataset(_config):
-    data_name = _config['dataset']
-    baseset_name = get_dataset_base_name(data_name)
-    tr_transforms = get_train_transforms(_config)
-    tr_parent = SuperpixelDataset(  # base dataset
-        which_dataset=baseset_name,
-        base_dir=_config['path'][data_name]['data_dir'],
-        idx_split=_config['eval_fold'],
-        mode='train',
-        # dummy entry for superpixel dataset
-        min_fg=str(_config["min_fg_data"]),
-        image_size=_config["input_size"][0],
-        transforms=tr_transforms,
-        nsup=_config['task']['n_shots'],
-        scan_per_load=_config['scan_per_load'],
-        exclude_list=_config["exclude_cls_list"],
-        superpix_scale=_config["superpix_scale"],
-        fix_length=_config["max_iters_per_load"] if (data_name == 'C0_Superpix') or (
-            data_name == 'CHAOST2_Superpix') else _config["max_iters_per_load"],
-        use_clahe=_config['use_clahe'],
-        use_3_slices=_config["use_3_slices"],
-        tile_z_dim=3 if not _config["use_3_slices"] else 1,
+def build_episode_loader(_config):
+    """构建 episodic DataLoader，用于小样本分割训练。"""
+
+    if _config["dataset"] != "POTSDAM_BIJIE":
+        raise ValueError(f"Unsupported dataset '{_config['dataset']}'")
+
+    # 调用定制的数据加载器生成 episodic 数据集，episodes 为可迭代对象，dataset 为父级数据集对象。
+    episodes, dataset = med_fewshot(
+        dataset_name=_config["dataset"],
+        base_dir=_config["path"]["POTSDAM_BIJIE"]["data_dir"],
+        idx_split=0,
+        mode="train",
+        scan_per_load=_config["scan_per_load"],
+        transforms=get_train_transforms(_config),
+        act_labels=[1],
+        n_ways=_config["task"]["n_ways"],
+        n_shots=_config["task"]["n_shots"],
+        max_iters_per_load=_config["max_iters_per_load"],
+        n_queries=_config["task"]["n_queries"],
+        support_id_whitelist=_config.get("support_id_whitelist"),
     )
-    
-    return tr_parent
+    # 构建 PyTorch DataLoader，负责按批次提供 episodic 数据。开启 shuffle 与 pinned memory 提升训练效率。
+    loader = DataLoader(
+        episodes,
+        batch_size=_config["batch_size"],
+        shuffle=True,
+        num_workers=_config["num_workers"],
+        pin_memory=True,
+        drop_last=True,
+    )
+    return loader, dataset
 
 
-def get_dataset(_config):
-    return get_nii_dataset(_config)
+def compute_binary_iou(pred_logits: torch.Tensor, target: torch.Tensor) -> float:
+    """计算二类前景的 IoU 指标，用于监控模型分割性能。"""
+
+    # 取 argmax 获得最终类别预测结果。
+    preds = pred_logits.argmax(dim=1)
+    # 构建前景布尔掩码，值为 1 代表前景，其余为背景。
+    target_fg = target == 1
+    pred_fg = preds == 1
+    # 交集：预测与标注同时为前景的像素数；并集：预测或标注为前景的像素数。
+    intersection = (pred_fg & target_fg).float().sum(dim=(-1, -2))
+    union = (pred_fg | target_fg).float().sum(dim=(-1, -2)) + 1e-6
+    # 对 batch 求平均，返回 python float。
+    return (intersection / union).mean().item()
 
 
 @ex.automain
 def main(_run, _config, _log):
+    """Sacred 自动调用的主函数，负责完整的训练流程。"""
+
+    # 默认使用 float32 训练，可根据需要调整精度。
     precision = torch.float32
-    torch.autograd.set_detect_anomaly(True)
+    # 如果存在可用 GPU，则优先使用 GPU 加速，否则退回 CPU。
+    # 训练脚本在单卡场景下运行，如需多卡需额外修改模型和数据加载逻辑。
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # 固定随机数种子，确保实验结果可复现。
+    set_seed(_config["seed"])
+
+    # 若 Sacred 监控器存在，则整理源码快照，方便复现实验。
     if _run.observers:
-        os.makedirs(f'{_run.observers[0].dir}/snapshots', exist_ok=True)
-        for source_file, _ in _run.experiment_info['sources']:
-            os.makedirs(os.path.dirname(f'{_run.observers[0].dir}/source/{source_file}'),
-                        exist_ok=True)
-            _run.observers[0].save_file(source_file, f'source/{source_file}')
-        shutil.rmtree(f'{_run.observers[0].basedir}/_sources')
+        os.makedirs(f"{_run.observers[0].dir}/snapshots", exist_ok=True)
+        for source_file, _ in _run.experiment_info["sources"]:
+            os.makedirs(os.path.dirname(f"{_run.observers[0].dir}/source/{source_file}"), exist_ok=True)
+            _run.observers[0].save_file(source_file, f"source/{source_file}")
+        shutil.rmtree(f"{_run.observers[0].basedir}/_sources")
 
-    set_seed(_config['seed'])
+    # TensorBoard 记录器：记录损失、IoU 等指标，便于可视化训练曲线。
+    writer = SummaryWriter(f"{_run.observers[0].dir}/logs")
 
-    writer = SummaryWriter(f'{_run.observers[0].dir}/logs')
-    _log.info('###### Create model ######')
-    if _config['reload_model_path'] != '':
-        _log.info(f'###### Reload model {_config["reload_model_path"]} ######')
-    else:
-        _config['reload_model_path'] = None
-    model = FewShotSeg(image_size=_config['input_size'][0], pretrained_path=_config['reload_model_path'], cfg=_config['model'])
-
-    model = model.to(device, precision)
+    _log.info("###### Create model ######")
+    # 构建 FewShotSeg 模型，支持加载预训练权重；转换到目标设备并设定计算精度。
+    model = FewShotSeg(
+        image_size=_config["input_size"][0],
+        pretrained_path=_config["reload_model_path"] or None,
+        cfg=_config["model"],
+    ).to(device, precision)
     model.train()
-    
-    _log.info('###### Load data ######')
-    data_name = _config['dataset']
-    tr_parent = get_dataset(_config)
 
-    # dataloaders
-    trainloader = DataLoader(
-        tr_parent,
-        batch_size=_config['batch_size'],
-        shuffle=True,
-        num_workers=_config['num_workers'],
-        pin_memory=True,
-        drop_last=True
-    )
+    _log.info("###### Build episodic loader ######")
+    # 构建 episodic 训练数据加载器以及父数据集对象，用于后续可选的缓存刷新。
+    trainloader, parent_dataset = build_episode_loader(_config)
 
-    _log.info('###### Set optimizer ######')
-    if _config['optim_type'] == 'sgd':
-        optimizer = torch.optim.SGD(model.parameters(), **_config['optim'])
-    elif _config['optim_type'] == 'adam':
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=_config['lr'], eps=1e-5)
+    # 根据配置选择优化器类型，目前支持 SGD 与 AdamW。
+    if _config["optim_type"] == "sgd":
+        optimizer = torch.optim.SGD(model.parameters(), **_config["optim"])
+    elif _config["optim_type"] == "adam":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=_config["lr"], eps=1e-5)
     else:
         raise NotImplementedError
 
-    scheduler = MultiStepLR(
-        optimizer, milestones=_config['lr_milestones'],  gamma=_config['lr_step_gamma'])
+    # 多阶段学习率调度器：在指定里程碑时刻乘以 gamma 衰减。
+    scheduler = MultiStepLR(optimizer, milestones=_config["lr_milestones"], gamma=_config["lr_step_gamma"])
 
-    my_weight = compose_wt_simple(_config["use_wce"], data_name)
+    # CrossEntropy 损失，支持忽略标签以及可选的类别权重（用于类别不平衡）。
     criterion = nn.CrossEntropyLoss(
-        ignore_index=_config['ignore_label'], weight=my_weight)
+        ignore_index=_config["ignore_label"],
+        weight=compose_wt_simple(_config["use_wce"], _config["dataset"]),
+    )
 
-    i_iter = 0  # total number of iteration
-    # number of times for reloading
-    n_sub_epoches = max(1, _config['n_steps'] // _config['max_iters_per_load'], _config["epochs"])
-    log_loss = {'loss': 0, 'align_loss': 0}
+    # 计算理论上需要的 sub-epoch 数量：取 max 以保证训练步数或 epoch 数不被截断。
+    max_sub_epochs = max(1, _config["n_steps"] // _config["max_iters_per_load"], _config["epochs"])
 
-    _log.info('###### Training ######')
-    epoch_losses = []
-    for sub_epoch in range(n_sub_epoches):
-        _log.info(
-            f'###### This is epoch {sub_epoch} of {n_sub_epoches} epoches ######')
+    # i_iter: 全局已经执行的 iteration 数；losses_record: 用于缓存损失值（如需调试）。
+    i_iter = 0
+    losses_record = []
+
+    for sub_epoch in range(max_sub_epochs):
+        _log.info(f"###### Sub-epoch {sub_epoch + 1}/{max_sub_epochs} ######")
+        # 部分数据集实现了 reload_buffer，用于周期性刷新支撑缓存。
+        if hasattr(parent_dataset, "reload_buffer"):
+            parent_dataset.reload_buffer()
+            trainloader.dataset.update_index()
+
+        # 使用 tqdm 创建进度条，实时显示损失与 IoU。
         pbar = tqdm(trainloader)
+        # 梯度累积前需手动清零。
         optimizer.zero_grad()
-        for idx, sample_batched in enumerate(tqdm(trainloader)):
-            losses = []
+
+        for idx, sample in enumerate(pbar):
             i_iter += 1
-            support_images = [[shot.to(device, precision) for shot in way]
-                              for way in sample_batched['support_images']]
-            support_fg_mask = [[shot[f'fg_mask'].float().to(device, precision) for shot in way]
-                               for way in sample_batched['support_mask']]
-            support_bg_mask = [[shot[f'bg_mask'].float().to(device, precision) for shot in way]
-                               for way in sample_batched['support_mask']]
+            # Support 图片按照 way -> shot 的结构存储，需要逐元素迁移到目标设备。
+            support_images = [[shot.to(device, precision) for shot in way] for way in sample["support_images"]]
+            # 前景/背景掩码同样需要迁移到设备，且转换为 float 以便后续计算。
+            support_fg_mask = [
+                [shot["fg_mask"].float().to(device, precision) for shot in way] for way in sample["support_mask"]
+            ]
+            support_bg_mask = [
+                [shot["bg_mask"].float().to(device, precision) for shot in way] for way in sample["support_mask"]
+            ]
+            # Query 图片直接堆叠为批次，标签在最后拼接成一个 tensor。
+            query_images = [img.to(device, precision) for img in sample["query_images"]]
+            query_labels = torch.cat([lb.long().to(device) for lb in sample["query_labels"]], dim=0)
 
-            query_images = [query_image.to(device, precision)
-                            for query_image in sample_batched['query_images']]
-            query_labels = torch.cat(
-                [query_label.long().to(device) for query_label in sample_batched['query_labels']], dim=0)
+            # 前向传播，返回 query 预测、对齐损失等项；训练阶段 isval=False。
+            out = model(
+                support_images,
+                support_fg_mask,
+                support_bg_mask,
+                query_images,
+                isval=False,
+                val_wsize=None,
+            )
+            query_pred, align_loss, *_ = out
 
-            loss = 0.0
-            try:
-                out = model(support_images, support_fg_mask, support_bg_mask,
-                        query_images, isval=False, val_wsize=None)
-                query_pred, align_loss, _, _, _, _, _ = out
-                # pred = np.array(query_pred.argmax(dim=1)[0].cpu())
-            except Exception as e:
-                print(f'faulty batch detected, skip: {e}')
-                # offload cuda memory
-                del support_images, support_fg_mask, support_bg_mask, query_images, query_labels
-                continue
-                 
-            query_loss = criterion(query_pred.float(), query_labels.long())
-            loss += query_loss + align_loss
-            pbar.set_postfix({'loss': loss.item()})
+            # 总损失 = 主任务交叉熵 + 原型对齐损失，反向传播累积梯度。
+            loss = criterion(query_pred.float(), query_labels) + align_loss
             loss.backward()
-            if (idx + 1) % _config['grad_accumulation_steps'] == 0:
+
+            # 梯度累积到指定步数后才执行优化器更新和学习率调度。
+            if (idx + 1) % _config["grad_accumulation_steps"] == 0:
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
-            
-            losses.append(loss.item())
-            query_loss = query_loss.detach().data.cpu().numpy()
-            align_loss = align_loss.detach().data.cpu().numpy() if align_loss != 0 else 0
 
-            _run.log_scalar('loss', query_loss)
-            _run.log_scalar('align_loss', align_loss)
+            # 计算二分类 IoU，作为监控指标。
+            iou = compute_binary_iou(query_pred.detach(), query_labels.detach())
+            losses_record.append(loss.item())
+            pbar.set_postfix(loss=f"{loss.item():.4f}", iou=f"{iou:.4f}")
 
-            log_loss['loss'] += query_loss
-            log_loss['align_loss'] += align_loss
+            # 将损失、对齐损失与 IoU 写入 TensorBoard。
+            writer.add_scalar("train/loss", loss.item(), i_iter)
+            writer.add_scalar("train/align_loss", align_loss.item(), i_iter)
+            writer.add_scalar("train/iou", iou, i_iter)
 
-            # print loss and take snapshots
-            if (i_iter + 1) % _config['print_interval'] == 0:
-                writer.add_scalar('loss', loss, i_iter)
-                writer.add_scalar('query_loss', query_loss, i_iter)
-                writer.add_scalar('align_loss', align_loss, i_iter)
+            # 按配置定期保存模型快照，便于中断恢复或模型选择。
+            if (i_iter + 1) % _config["save_snapshot_every"] == 0:
+                _log.info("###### Taking snapshot ######")
+                torch.save(
+                    model.state_dict(),
+                    os.path.join(_run.observers[0].dir, "snapshots", f"{i_iter + 1}.pth"),
+                )
 
-                loss = log_loss['loss'] / _config['print_interval']
-                align_loss = log_loss['align_loss'] / _config['print_interval']
+            # 达到配置的训练步数后提前结束当前 sub-epoch。
+            if i_iter >= _config["n_steps"]:
+                break
+        if i_iter >= _config["n_steps"]:
+            break
 
-                log_loss['loss'] = 0
-                log_loss['align_loss'] = 0
-
-                print(
-                    f'step {i_iter+1}: loss: {loss}, align_loss: {align_loss},')
-
-            if (i_iter + 1) % _config['save_snapshot_every'] == 0:
-                _log.info('###### Taking snapshot ######')
-                torch.save(model.state_dict(),
-                           os.path.join(f'{_run.observers[0].dir}/snapshots', f'{i_iter + 1}.pth'))
-
-            if (i_iter - 1) >= _config['n_steps']:
-                break  # finish up
-        epoch_losses.append(np.mean(losses))
-        print(f"Epoch {sub_epoch} loss: {np.mean(losses)}")
+    _log.info("Training finished.")
+    # 关闭 TensorBoard 记录器，防止资源泄漏。
+    writer.close()
