@@ -5,6 +5,7 @@ import torch
 import numpy as np
 
 from dataloaders.common import ReloadPairedDataset, ValidationDataset
+from dataloaders.dataset_utils import DATASET_INFO
 from dataloaders.satellite_dataset import SatelliteFewShotDataset
 
 def attrib_basic(_sample, class_id):
@@ -117,8 +118,23 @@ def fewshot_pairing(paired_sample, n_ways, n_shots, cnt_query, coco=False, mask_
     }
 
 
-def med_fewshot(dataset_name, base_dir, idx_split, mode, scan_per_load,
-        transforms, act_labels, n_ways, n_shots, max_iters_per_load, min_fg = '', n_queries=1, fix_parent_len = None, exclude_list = [], **kwargs):
+def med_fewshot(
+    dataset_name,
+    base_dir,
+    idx_split,
+    mode,
+    scan_per_load,
+    transforms,
+    act_labels=None,
+    n_ways=1,
+    n_shots=1,
+    max_iters_per_load=1000,
+    min_fg="",
+    n_queries=1,
+    fix_parent_len=None,
+    exclude_list=None,
+    **kwargs,
+):
     """
     Dataset wrapper
     Args:
@@ -149,8 +165,13 @@ def med_fewshot(dataset_name, base_dir, idx_split, mode, scan_per_load,
         fix_parent_len:
             fixed length of the parent dataset
     """
-    if dataset_name != 'POTSDAM_BIJIE':
+    if exclude_list is None:
+        exclude_list = []
+
+    if dataset_name not in DATASET_INFO:
         raise ValueError(f"Unsupported dataset '{dataset_name}' for satellite pipeline")
+
+    dataset_info = DATASET_INFO[dataset_name]
 
     mydataset = SatelliteFewShotDataset(
         dataset_name=dataset_name,
@@ -166,6 +187,26 @@ def med_fewshot(dataset_name, base_dir, idx_split, mode, scan_per_load,
     # Create sub-datasets and add class_id attribute. Here the class file is internally loaded and reloaded inside
     subsets = mydataset.subsets([{'basic': {'class_id': ii}}
         for ii, _ in enumerate(mydataset.label_name)])
+
+    if act_labels is None:
+        default_labels = dataset_info.get("DEFAULT_ACT_LABEL_IDS")
+        if default_labels is not None:
+            act_labels = list(default_labels)
+        else:
+            act_labels = [
+                idx
+                for idx in range(len(mydataset.label_name))
+                if idx != getattr(mydataset, "background_id", 0)
+            ]
+
+    act_labels = [cls for cls in act_labels if cls < len(subsets) and len(subsets[cls]) > 0]
+    if not act_labels:
+        raise ValueError("No active classes available for few-shot sampling.")
+
+    if n_ways > len(act_labels):
+        raise ValueError(
+            f"Requested n_ways={n_ways} but only {len(act_labels)} classes have samples."
+        )
 
     # Choose the classes of queries
     cnt_query = np.bincount(random.choices(population=range(n_ways), k=n_queries), minlength=n_ways)

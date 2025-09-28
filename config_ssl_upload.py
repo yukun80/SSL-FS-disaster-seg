@@ -99,6 +99,10 @@ def cfg():
         'weight_decay': weight_decay
     }
 
+    dataset_act_labels = {
+        'POTSDAM_BIJIE': [1],
+    }
+
     exp_prefix = ''
 
     exp_str = '_'.join([exp_prefix, dataset, f'sets_{task["n_shots"]}_shot'])
@@ -106,6 +110,7 @@ def cfg():
     path = {
         'log_dir': './runs',
         'POTSDAM_BIJIE': {'data_dir': './data/potsdam_bijie'},
+        'POTSDAM_OPENEARTHMAP': {'data_dir': './data/potsdam_OpenEarthMap'},
     }
 
 

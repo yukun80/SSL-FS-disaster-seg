@@ -37,18 +37,22 @@ def get_train_transforms(_config):
 def build_episode_loader(_config):
     """构建 episodic DataLoader，用于小样本分割训练。"""
 
-    if _config["dataset"] != "POTSDAM_BIJIE":
-        raise ValueError(f"Unsupported dataset '{_config['dataset']}'")
+    dataset_name = _config["dataset"]
+    if dataset_name not in _config["path"]:
+        raise KeyError(f"Missing path configuration for dataset '{dataset_name}'")
+
+    dataset_act_labels = _config.get("dataset_act_labels", {})
+    act_labels = dataset_act_labels.get(dataset_name)
 
     # 调用定制的数据加载器生成 episodic 数据集，episodes 为可迭代对象，dataset 为父级数据集对象。
     episodes, dataset = med_fewshot(
-        dataset_name=_config["dataset"],
-        base_dir=_config["path"]["POTSDAM_BIJIE"]["data_dir"],
+        dataset_name=dataset_name,
+        base_dir=_config["path"][dataset_name]["data_dir"],
         idx_split=0,
         mode="train",
         scan_per_load=_config["scan_per_load"],
         transforms=get_train_transforms(_config),
-        act_labels=[1],
+        act_labels=act_labels,
         n_ways=_config["task"]["n_ways"],
         n_shots=_config["task"]["n_shots"],
         max_iters_per_load=_config["max_iters_per_load"],

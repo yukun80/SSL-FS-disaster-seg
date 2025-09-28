@@ -31,7 +31,21 @@ class SatelliteFewShotDataset(BaseDataset):
     ) -> None:
         super().__init__(base_dir=str(base_dir))
         info = DATASET_INFO[dataset_name]
-        self.label_name = info["REAL_LABEL_NAME"]
+
+        class_id_map = info.get("CLASS_ID_MAP")
+        if class_id_map is None:
+            label_names = info["REAL_LABEL_NAME"]
+            class_id_map = {name: idx for idx, name in enumerate(label_names)}
+        max_class_id = max(class_id_map.values())
+        self.label_name: List[str] = [""] * (max_class_id + 1)
+        for name, cid in class_id_map.items():
+            if cid >= len(self.label_name):
+                self.label_name.extend([""] * (cid - len(self.label_name) + 1))
+            self.label_name[cid] = name
+
+        self.class_id_map = class_id_map
+        self.background_id = info.get("BACKGROUND_ID", 0)
+        self.forbidden_ids = set(info.get("FORBIDDEN_CLASS_IDS", []))
         self.nclass = len(self.label_name)
         self.transforms = transforms
         self.is_train = split == "train"
@@ -71,7 +85,10 @@ class SatelliteFewShotDataset(BaseDataset):
             with rasterio.Env():
                 with rasterio.open(ann_path) as src:
                     mask = src.read(1, out_dtype="uint8")
-            mask = (mask > 0).astype(np.uint8)
+
+            mask = mask.astype(np.int64)
+            if self.forbidden_ids and np.isin(mask, list(self.forbidden_ids)).any():
+                continue
 
             self.samples.append(
                 {
@@ -88,21 +105,25 @@ class SatelliteFewShotDataset(BaseDataset):
         self.scan_ids = list(self.ids)
         self.pid_curr_load = list(self.scan_ids)
         self.all_label_names = self.label_name
+        foreground_ids = [cid for cid in range(len(self.label_name)) if cid != self.background_id]
         self.tp1_cls_map = {
-            self.label_name[1]: {scan_id: [0] for scan_id in self.scan_ids}
+            self.label_name[cid]: {scan_id: [0] for scan_id in self.scan_ids}
+            for cid in foreground_ids
+            if cid < len(self.label_name) and self.label_name[cid]
         }
         self.potential_support_sid: List[str] = []
         self.active_indices = list(range(len(self.samples)))
         self._build_class_indices()
 
     def _build_class_indices(self) -> None:
-        self.idx_by_class = {cls: [] for cls in self.label_name}
+        self.idx_by_class = {cid: [] for cid in range(len(self.label_name))}
         for local_idx, global_idx in enumerate(self.active_indices):
             mask = self.samples[global_idx]["label"]
-            if np.any(mask == 0):
-                self.idx_by_class[self.label_name[0]].append(local_idx)
-            if np.any(mask == 1):
-                self.idx_by_class[self.label_name[1]].append(local_idx)
+            present_ids = np.unique(mask)
+            for cid in present_ids:
+                if cid >= len(self.label_name):
+                    continue
+                self.idx_by_class[cid].append(local_idx)
 
     def reload_buffer(self) -> None:
         if self.scan_per_load is None or self.scan_per_load <= 0 or self.scan_per_load >= len(self.scan_ids):
@@ -115,10 +136,10 @@ class SatelliteFewShotDataset(BaseDataset):
 
     def subsets(self, sub_args_lst=None):
         subsets = []
-        for idx, cls_name in enumerate(self.idx_by_class.keys()):
-            indices = self.idx_by_class[cls_name]
+        for cid in range(len(self.label_name)):
+            indices = self.idx_by_class.get(cid, [])
             if sub_args_lst is not None:
-                subsets.append(Subset(dataset=self, indices=indices, sub_attrib_args=sub_args_lst[idx]))
+                subsets.append(Subset(dataset=self, indices=indices, sub_attrib_args=sub_args_lst[cid]))
             else:
                 subsets.append(Subset(dataset=self, indices=indices))
         return subsets
