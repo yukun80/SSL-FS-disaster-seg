@@ -1,6 +1,8 @@
 """Satellite few-shot dataset utilities (rasterio backend)."""
 from __future__ import annotations
 
+import logging
+import os
 import random
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
@@ -8,12 +10,16 @@ from typing import Dict, Iterable, List, Optional
 import numpy as np
 import rasterio
 import torch
+from rasterio.errors import RasterioIOError
+from tqdm.auto import tqdm
 
 from dataloaders.common import BaseDataset, Subset
 from dataloaders.dataset_utils import DATASET_INFO
 
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+
+logger = logging.getLogger(__name__)
 
 
 class SatelliteFewShotDataset(BaseDataset):

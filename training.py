@@ -2,8 +2,16 @@
 
 遥感小样本分割训练脚本入口点。
 
-Example:
-    python training.py with dataset='POTSDAM_BIJIE' task.n_shots=1 n_steps=2000
+Stage-1 command (OpenEarthMap pretrain example):
+python training.py \
+    with dataset='POTSDAM_OPENEARTHMAP' task.n_shots=1 task.n_queries=1 \
+    n_steps=100100 max_iters_per_load=1000 save_snapshot_every=25000 \
+    exp_prefix='openearthmap_pretrain'
+
+Stage-2 command (landslide adaptation example):
+    PYTHONPATH=$(pwd)/dinov3 python training.py \
+        with dataset='POTSDAM_BIJIE' task.n_shots=1 task.n_queries=1 \
+        reload_model_path='runs/openearthmap_pretrain/.../snapshots/STEP.pth'
 """
 
 from __future__ import annotations

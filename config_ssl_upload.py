@@ -101,6 +101,7 @@ def cfg():
 
     dataset_act_labels = {
         'POTSDAM_BIJIE': [1],
+        'POTSDAM_OPENEARTHMAP': list(range(1, 9)),
     }
 
     exp_prefix = ''
