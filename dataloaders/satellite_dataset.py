@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 import numpy as np
+import cv2
 import rasterio
 import torch
 from rasterio.errors import RasterioIOError
@@ -33,10 +34,15 @@ class SatelliteFewShotDataset(BaseDataset):
         split: str,
         transforms,
         scan_per_load: int,
+        image_size: int,
         support_id_whitelist: Optional[Iterable[str]] = None,
     ) -> None:
         super().__init__(base_dir=str(base_dir))
         info = DATASET_INFO[dataset_name]
+
+        self.dataset_name = dataset_name
+        self.split = split
+        self.image_size = image_size
 
         class_id_map = info.get("CLASS_ID_MAP")
         if class_id_map is None:
@@ -70,55 +76,107 @@ class SatelliteFewShotDataset(BaseDataset):
         self.samples: List[Dict[str, np.ndarray]] = []
         self.ids: List[str] = []
         self.support_whitelist = set(support_id_whitelist) if support_id_whitelist else None
+        self.scan_per_load = scan_per_load
 
+        self.tile_records: List[Dict[str, Path]] = []
         for img_path in sorted(img_root.glob("*.tif")):
             ann_path = ann_root / img_path.name
             if not ann_path.exists():
                 continue
+            self.tile_records.append(
+                {
+                    "scan_id": img_path.stem,
+                    "img_path": img_path,
+                    "ann_path": ann_path,
+                }
+            )
 
-            sample_id = img_path.stem
+        if not self.tile_records:
+            raise RuntimeError(f"No samples found in {img_root}")
 
-            with rasterio.Env():
-                with rasterio.open(img_path) as src:
-                    image = src.read(out_dtype="float32")
-                    if src.count < 3:
-                        raise ValueError(
-                            f"Expected RGB imagery for {img_path}, got {src.count} channels"
-                        )
-                    image = np.transpose(image[:3, ...], (1, 2, 0)) / 255.0
+        self.scan_ids = [record["scan_id"] for record in self.tile_records]
+        self._load_buffer()
+
+    def _select_record_indices(self) -> List[int]:
+        if self.scan_per_load is None or self.scan_per_load <= 0 or self.scan_per_load >= len(self.tile_records):
+            return list(range(len(self.tile_records)))
+        return random.sample(range(len(self.tile_records)), self.scan_per_load)
+
+    def _load_buffer(self, record_indices: Optional[List[int]] = None) -> None:
+        if record_indices is None:
+            record_indices = self._select_record_indices()
+
+        samples: List[Dict[str, np.ndarray]] = []
+        ids: List[str] = []
+
+        for idx in tqdm(
+            record_indices,
+            desc=f"Loading {self.dataset_name}:{self.split}",
+            unit="tile",
+            dynamic_ncols=True,
+        ):
+            record = self.tile_records[idx]
+            img_path: Path = record["img_path"]
+            ann_path: Path = record["ann_path"]
+            sample_id: str = record["scan_id"]
+
+            try:
+                with rasterio.Env():
+                    with rasterio.open(img_path) as src:
+                        image = src.read(out_dtype="float32")
+                        if src.count < 3:
+                            raise ValueError(
+                                f"Expected RGB imagery for {img_path}, got {src.count} channels"
+                            )
+                        image = np.transpose(image[:3, ...], (1, 2, 0)) / 255.0
+            except (RasterioIOError, ValueError) as exc:
+                logger.warning("Skipping image '%s': %s", img_path.name, exc)
+                continue
+
             image = (image - IMAGENET_MEAN) / IMAGENET_STD
 
-            with rasterio.Env():
-                with rasterio.open(ann_path) as src:
-                    mask = src.read(1, out_dtype="uint8")
+            try:
+                with rasterio.Env():
+                    with rasterio.open(ann_path) as src:
+                        mask = src.read(1, out_dtype="uint8")
+            except RasterioIOError as exc:
+                logger.warning("Skipping annotation '%s': %s", ann_path.name, exc)
+                continue
 
             mask = mask.astype(np.int64)
+            target_size = (self.image_size, self.image_size)
+            if image.shape[:2] != target_size:
+                image = cv2.resize(image, target_size, interpolation=cv2.INTER_LINEAR)
+            if mask.shape != target_size:
+                mask = cv2.resize(mask, target_size, interpolation=cv2.INTER_NEAREST)
             if self.forbidden_ids and np.isin(mask, list(self.forbidden_ids)).any():
                 continue
 
-            self.samples.append(
-                {
-                    "image": image,
-                    "label": mask,
-                    "scan_id": sample_id,
-                }
+            samples.append({
+                "image": image,
+                "label": mask,
+                "scan_id": sample_id,
+            })
+            ids.append(sample_id)
+
+        if not samples:
+            raise RuntimeError(
+                f"Unable to load any samples for {self.dataset_name}:{self.split}. "
+                "Check data integrity or reduce scan_per_load."
             )
-            self.ids.append(sample_id)
 
-        if not self.samples:
-            raise RuntimeError(f"No samples found in {img_root}")
-
-        self.scan_ids = list(self.ids)
-        self.pid_curr_load = list(self.scan_ids)
+        self.samples = samples
+        self.ids = ids
+        self.pid_curr_load = list(ids)
+        self.active_indices = list(range(len(self.samples)))
+        self.potential_support_sid = list(self.pid_curr_load)
         self.all_label_names = self.label_name
         foreground_ids = [cid for cid in range(len(self.label_name)) if cid != self.background_id]
         self.tp1_cls_map = {
-            self.label_name[cid]: {scan_id: [0] for scan_id in self.scan_ids}
+            self.label_name[cid]: {scan_id: [0] for scan_id in self.pid_curr_load}
             for cid in foreground_ids
             if cid < len(self.label_name) and self.label_name[cid]
         }
-        self.potential_support_sid: List[str] = []
-        self.active_indices = list(range(len(self.samples)))
         self._build_class_indices()
 
     def _build_class_indices(self) -> None:
@@ -132,13 +190,11 @@ class SatelliteFewShotDataset(BaseDataset):
                 self.idx_by_class[cid].append(local_idx)
 
     def reload_buffer(self) -> None:
-        if self.scan_per_load is None or self.scan_per_load <= 0 or self.scan_per_load >= len(self.scan_ids):
-            self.active_indices = list(range(len(self.samples)))
-        else:
-            chosen = random.sample(self.scan_ids, k=self.scan_per_load)
-            self.active_indices = [self.ids.index(pid) for pid in chosen]
-        random.shuffle(self.active_indices)
-        self._build_class_indices()
+        if self.scan_per_load is None or self.scan_per_load <= 0 or self.scan_per_load >= len(self.tile_records):
+            logger.info("reload_buffer skipped: loading full dataset in memory.")
+            return
+
+        self._load_buffer()
 
     def subsets(self, sub_args_lst=None):
         subsets = []

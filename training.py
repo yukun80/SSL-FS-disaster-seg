@@ -5,12 +5,12 @@
 Stage-1 command (OpenEarthMap pretrain example):
 python training.py \
     with dataset='POTSDAM_OPENEARTHMAP' task.n_shots=1 task.n_queries=1 \
-    n_steps=100100 max_iters_per_load=1000 save_snapshot_every=25000 \
-    exp_prefix='openearthmap_pretrain'
+    scan_per_load=256 num_workers=0 n_steps=100100 max_iters_per_load=1000 \
+    save_snapshot_every=25000 exp_prefix='openearthmap_pretrain'
 
 Stage-2 command (landslide adaptation example):
     PYTHONPATH=$(pwd)/dinov3 python training.py \
-        with dataset='POTSDAM_BIJIE' task.n_shots=1 task.n_queries=1 \
+        with dataset='POTSDAM_BIJIE' task.n_shots=1 task.n_queries=1 num_workers=0 \
         reload_model_path='runs/openearthmap_pretrain/.../snapshots/STEP.pth'
 """
 
@@ -66,6 +66,7 @@ def build_episode_loader(_config):
         max_iters_per_load=_config["max_iters_per_load"],
         n_queries=_config["task"]["n_queries"],
         support_id_whitelist=_config.get("support_id_whitelist"),
+        image_size=_config["input_size"][0],
     )
     # 构建 PyTorch DataLoader，负责按批次提供 episodic 数据。开启 shuffle 与 pinned memory 提升训练效率。
     loader = DataLoader(

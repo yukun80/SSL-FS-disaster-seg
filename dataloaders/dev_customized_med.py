@@ -179,6 +179,7 @@ def med_fewshot(
         split=mode,
         transforms=transforms,
         scan_per_load=scan_per_load,
+        image_size=kwargs.get('image_size'),
         support_id_whitelist=kwargs.get('support_id_whitelist'),
     )
 
@@ -261,6 +262,7 @@ def med_fewshot_val(dataset_name, base_dir, idx_split, scan_per_load, act_labels
         split=mode,
         transforms=transforms,
         scan_per_load=scan_per_load,
+        image_size=kwargs.get('image_size'),
         support_id_whitelist=kwargs.get('support_id_whitelist'),
     )
     mydataset.add_attrib('basic', attrib_basic, {})
