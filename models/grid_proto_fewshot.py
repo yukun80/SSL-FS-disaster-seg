@@ -131,6 +131,7 @@ class FewShotSeg(nn.Module):
             print(f'Injecting LoRA with rank:{self.config["lora"]}')
             encoder_lora_params = inject_trainable_lora(
                 self.encoder, r=self.config['lora'])
+            self._load_adapter_from_dense_stage()
 
     def get_features(self, imgs_concat):
         backbone_name = self.config['which_model']
@@ -165,6 +166,24 @@ class FewShotSeg(nn.Module):
                 f'Backbone network {backbone_name} not implemented')
 
         return img_fts
+
+    def _load_adapter_from_dense_stage(self) -> None:
+        adapter_path = self.config.get('adapter_state_path')
+        if not adapter_path:
+            return
+        adapter_path = Path(adapter_path).expanduser()
+        if not adapter_path.exists():
+            print(f"Adapter state path {adapter_path} not found; skipping load.")
+            return
+        state = torch.load(adapter_path, map_location='cpu')
+        lora_state = state.get('lora', {})
+        for name, module in self.encoder.named_modules():
+            if hasattr(module, 'lora_up') and hasattr(module, 'lora_down'):
+                up_key = f"{name}.lora_up"
+                down_key = f"{name}.lora_down"
+                if up_key in lora_state and down_key in lora_state:
+                    module.lora_up.load_state_dict(lora_state[up_key])
+                    module.lora_down.load_state_dict(lora_state[down_key])
 
     def get_cls(self):
         """

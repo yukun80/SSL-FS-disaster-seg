@@ -45,6 +45,8 @@ class LoraInjectedLinear(nn.Module):
             )
         self.r = r
         self.linear = nn.Linear(in_features, out_features, bias)
+        self.in_features = in_features
+        self.out_features = out_features
         self.lora_down = nn.Linear(in_features, r, bias=False)
         self.dropout = nn.Dropout(dropout_p)
         self.lora_up = nn.Linear(r, out_features, bias=False)
@@ -72,6 +74,22 @@ class LoraInjectedLinear(nn.Module):
         self.selector.weight.data = self.selector.weight.data.to(
             self.lora_up.weight.device
         ).to(self.lora_up.weight.dtype)
+
+    @property
+    def weight(self) -> torch.nn.Parameter:
+        return self.linear.weight
+
+    @weight.setter
+    def weight(self, value: torch.nn.Parameter) -> None:
+        self.linear.weight = value
+
+    @property
+    def bias(self) -> torch.nn.Parameter | None:
+        return self.linear.bias
+
+    @bias.setter
+    def bias(self, value: torch.nn.Parameter | None) -> None:
+        self.linear.bias = value
 
 
 class LoraInjectedConv2d(nn.Module):
@@ -105,6 +123,13 @@ class LoraInjectedConv2d(nn.Module):
             groups=groups,
             bias=bias,
         )
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.groups = groups
 
         self.lora_down = nn.Conv2d(
             in_channels=in_channels,
@@ -158,6 +183,22 @@ class LoraInjectedConv2d(nn.Module):
         self.selector.weight.data = self.selector.weight.data.to(
             self.lora_up.weight.device
         ).to(self.lora_up.weight.dtype)
+
+    @property
+    def weight(self) -> torch.nn.Parameter:
+        return self.conv.weight
+
+    @weight.setter
+    def weight(self, value: torch.nn.Parameter) -> None:
+        self.conv.weight = value
+
+    @property
+    def bias(self) -> torch.nn.Parameter | None:
+        return self.conv.bias
+
+    @bias.setter
+    def bias(self, value: torch.nn.Parameter | None) -> None:
+        self.conv.bias = value
 
 
 UNET_DEFAULT_TARGET_REPLACE = {"CrossAttention", "Attention", "GEGLU"}

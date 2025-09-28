@@ -1,0 +1,58 @@
+dataset:
+  name: POTSDAM_OPENEARTHMAP
+  root: ./data/potsdam_OpenEarthMap
+  train_split: train
+  val_split: val
+  in_channels: 3
+  num_classes: 9
+  batch_size: 16
+  num_workers: 0
+  crop_size: 512
+  min_scale: 0.5
+  max_scale: 1.5
+  min_aspect: 0.75
+  max_aspect: 1.33
+  rotation_deg: 15
+  color_jitter:
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+    hue: 0.02
+  cutmix_prob: 0.3
+  copy_paste_prob: 0.3
+  normalization:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+  ignore_index: 255
+
+model:
+  backbone: dinov3_vits16
+  weights: checkpoints/dinov3_vits16_pretrain_lvd1689m-08c60483.pth
+  freeze_backbone_at: 9
+  lora_rank: 8
+  adapter_channels: 3
+  head_channels: 256
+  dropout: 0.1
+  ppm_bins: [1, 2, 3, 6]
+
+optimization:
+  epochs: 20
+  warmup_epochs: 1
+  base_lr: 5.0e-6
+  min_lr: 1.0e-5
+  weight_decay: 0.05
+  betas: [0.9, 0.999]
+  gradient_clip_norm: 1.0
+  lr_multipliers:
+    backbone: 0.1
+    lora: 1.0
+    adapter: 1.0
+    head: 1.0
+
+logging:
+  output_dir: runs/dense_openearthmap
+  save_every: 5
+  val_every: 1
+  log_interval: 20
+  resume: null
+  seed: 42

@@ -27,7 +27,7 @@ def cfg():
     gpu_id = 0
     mode = 'train' # for now only allows 'train' 
     do_validation=False
-    num_workers = 4 # 0 for debugging. 
+    num_workers = 0 # 0 for debugging. 
 
     dataset = 'POTSDAM_BIJIE'  # remote-sensing landslide dataset
 
@@ -59,6 +59,7 @@ def cfg():
     proto_grid_size = 8
     feature_hw = [max(input_size[0] // 16, 32), max(input_size[0] // 16, 32)]
     reload_model_path = None
+    adapter_state_path = None
     lora = 0
     use_slice_adapter = False
     adapter_layers = 1
@@ -76,6 +77,7 @@ def cfg():
         'proto_grid_size' : proto_grid_size,
         'feature_hw': feature_hw,
         'reload_model_path': reload_model_path,
+        'adapter_state_path': adapter_state_path,
         'lora': lora,
         'use_slice_adapter': use_slice_adapter,
         'adapter_layers': adapter_layers,
