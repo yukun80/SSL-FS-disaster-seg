@@ -1,17 +1,36 @@
 """Training entry point for remote-sensing few-shot segmentation.
 
 遥感小样本分割训练脚本入口点。
+smoke run：
+python training.py with \
+        n_steps=2000 \
+        max_iters_per_load=128 \
+        scan_per_load=64 \
+        save_snapshot_every=1000 \
+        exp_prefix='stage2_smoke' \
+        path.log_dir='./runs/stage2_smoke'
+         
+full run：
 
-Stage-1 command (OpenEarthMap pretrain example):
-python training.py \
-    with dataset='POTSDAM_OPENEARTHMAP' task.n_shots=1 task.n_queries=1 \
-    scan_per_load=256 num_workers=0 n_steps=100100 max_iters_per_load=1000 \
-    save_snapshot_every=25000 exp_prefix='openearthmap_pretrain'
-
-Stage-2 command (landslide adaptation example):
-    PYTHONPATH=$(pwd)/dinov3 python training.py \
-        with dataset='POTSDAM_BIJIE' task.n_shots=1 task.n_queries=1 num_workers=0 \
-        reload_model_path='runs/openearthmap_pretrain/.../snapshots/STEP.pth'
+export STAGE1_ADAPTER_PATH=$(pwd)/runs/dense_openearthmap/adapter_lora_state.pt
+export SUPPORT_TILE_FILE=$(pwd)/data/potsdam_bijie/splits/support_ids.txt
+export STAGE2_TRAIN_QUERY_FILE=$(pwd)/data/potsdam_bijie/splits/train_query_ids.txt
+export STAGE2_LORA_RANK=8
+export CUDA_VISIBLE_DEVICES=0
+python training.py with \
+        n_steps=20000 \
+        max_iters_per_load=256 \
+        scan_per_load=128 \
+        save_snapshot_every=2000 \
+        exp_prefix='stage2_full' \
+        task.n_shots=8 \
+        path.log_dir='./runs/stage2_full'
+        
+python training.py with \
+        model.adapter_state_path=/home/yukun/codes/paper5_dino-sat/DINOv3-based-Self-Supervised-Few-Shot-Disaster/runs/dense_openearthmap/adapter_lora_state.pt \
+        model.lora=8 \
+        support_id_whitelist@cfg=/home/yukun/codes/paper5_dino-sat/DINOv3-based-Self-Supervised-Few-Shot-Disaster/data/potsdam_bijie/splits/support_ids.txt \
+        train_query_id_whitelist@cfg=/home/yukun/codes/paper5_dino-sat/DINOv3-based-Self-Supervised-Few-Shot-Disaster/data/potsdam_bijie/splits/train_query_ids.txt
 """
 
 from __future__ import annotations
@@ -66,6 +85,7 @@ def build_episode_loader(_config):
         max_iters_per_load=_config["max_iters_per_load"],
         n_queries=_config["task"]["n_queries"],
         support_id_whitelist=_config.get("support_id_whitelist"),
+        query_id_whitelist=_config.get("train_query_id_whitelist"),
         image_size=_config["input_size"][0],
     )
     # 构建 PyTorch DataLoader，负责按批次提供 episodic 数据。开启 shuffle 与 pinned memory 提升训练效率。

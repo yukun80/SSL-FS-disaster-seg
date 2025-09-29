@@ -36,6 +36,7 @@ class SatelliteFewShotDataset(BaseDataset):
         scan_per_load: int,
         image_size: int,
         support_id_whitelist: Optional[Iterable[str]] = None,
+        query_id_whitelist: Optional[Iterable[str]] = None,
     ) -> None:
         super().__init__(base_dir=str(base_dir))
         info = DATASET_INFO[dataset_name]
@@ -76,6 +77,7 @@ class SatelliteFewShotDataset(BaseDataset):
         self.samples: List[Dict[str, np.ndarray]] = []
         self.ids: List[str] = []
         self.support_whitelist = set(support_id_whitelist) if support_id_whitelist else None
+        self.query_whitelist = set(query_id_whitelist) if query_id_whitelist else None
         self.scan_per_load = scan_per_load
 
         self.tile_records: List[Dict[str, Path]] = []
@@ -168,7 +170,20 @@ class SatelliteFewShotDataset(BaseDataset):
         self.samples = samples
         self.ids = ids
         self.pid_curr_load = list(ids)
-        self.active_indices = list(range(len(self.samples)))
+
+        query_whitelist = self.query_whitelist
+        if query_whitelist is not None:
+            active_indices = [idx for idx, scan_id in enumerate(self.ids) if scan_id in query_whitelist]
+        else:
+            active_indices = list(range(len(self.samples)))
+
+        if not active_indices:
+            raise RuntimeError(
+                "No query tiles remain after applying whitelist/filtering. "
+                "Check SUPPORT_TILE_FILE / STAGE2_TRAIN_QUERY_FILE settings."
+            )
+
+        self.active_indices = active_indices
         self.potential_support_sid = list(self.pid_curr_load)
         self.all_label_names = self.label_name
         foreground_ids = [cid for cid in range(len(self.label_name)) if cid != self.background_id]

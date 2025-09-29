@@ -12,8 +12,8 @@ import matplotlib.pyplot as plt
 # for unit test from spatial_similarity_module import NONLocalBlock2D, LayerNorm
 
 def safe_norm(x, p = 2, dim = 1, eps = 1e-4):
-    x_norm = torch.norm(x, p = p, dim = dim) # .detach()
-    x_norm = torch.max(x_norm, torch.ones_like(x_norm).cuda() * eps)
+    x_norm = torch.norm(x, p = p, dim = dim)
+    x_norm = x_norm.clamp_min(eps)
     x = x.div(x_norm.unsqueeze(1).expand_as(x))
     return x
 
@@ -185,8 +185,8 @@ class MultiProtoAsConv(nn.Module):
         sup_y = sup_y.squeeze(0) # [nshot, 1, h, w]
 
         def safe_norm(x, p = 2, dim = 1, eps = 1e-4):
-            x_norm = torch.norm(x, p = p, dim = dim) # .detach()
-            x_norm = torch.max(x_norm, torch.ones_like(x_norm).cuda() * eps)
+            x_norm = torch.norm(x, p = p, dim = dim)
+            x_norm = x_norm.clamp_min(eps)
             x = x.div(x_norm.unsqueeze(1).expand_as(x))
             return x
         if val_wsize is None:
@@ -199,4 +199,3 @@ class MultiProtoAsConv(nn.Module):
         pred_grid, debug_assign, vis_dict = self.get_prediction_from_prototypes(pro_n, qry_n, mode, vis_sim=vis_sim) 
 
         return pred_grid, debug_assign, vis_dict, proto_grid
-

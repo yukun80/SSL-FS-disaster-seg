@@ -133,6 +133,8 @@ def med_fewshot(
     n_queries=1,
     fix_parent_len=None,
     exclude_list=None,
+    support_id_whitelist=None,
+    query_id_whitelist=None,
     **kwargs,
 ):
     """
@@ -180,7 +182,8 @@ def med_fewshot(
         transforms=transforms,
         scan_per_load=scan_per_load,
         image_size=kwargs.get('image_size'),
-        support_id_whitelist=kwargs.get('support_id_whitelist'),
+        support_id_whitelist=support_id_whitelist,
+        query_id_whitelist=query_id_whitelist,
     )
 
     mydataset.add_attrib('basic', attrib_basic, {})

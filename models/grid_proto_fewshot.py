@@ -39,6 +39,7 @@ class FewShotSeg(nn.Module):
         self.config = cfg or {
             'align': False, 'debug': False}
         self.patch_size = None
+        self.input_adapter = None
         self.get_encoder()
         self.get_cls()
         if self.config['use_slice_adapter']:
@@ -122,6 +123,7 @@ class FewShotSeg(nn.Module):
             self.encoder.eval()
             self.encoder.requires_grad_(False)
             _update_feature_hw_from_patch(self.patch_size)
+            self._build_input_adapter(in_channels=3)
         else:
             raise NotImplementedError(
                 f'Backbone network {backbone_name} not implemented')
@@ -138,6 +140,8 @@ class FewShotSeg(nn.Module):
         if 'dino' in backbone_name:
             if not self.patch_size:
                 raise ValueError('Patch size must be set for DINO-style backbones.')
+            if self.input_adapter is not None:
+                imgs_concat = self.input_adapter(imgs_concat)
             target_tokens = max(self.image_size // self.patch_size, 1)
             target_size = max(target_tokens * self.patch_size, self.patch_size)
             imgs_concat = F.interpolate(
@@ -176,6 +180,13 @@ class FewShotSeg(nn.Module):
             print(f"Adapter state path {adapter_path} not found; skipping load.")
             return
         state = torch.load(adapter_path, map_location='cpu')
+        if self.input_adapter is not None:
+            channel_state = state.get('channel_adapter')
+            if channel_state:
+                self.input_adapter[0].load_state_dict(channel_state, strict=False)
+            norm_state = state.get('adapter_norm')
+            if norm_state and len(self.input_adapter) > 1:
+                self.input_adapter[1].load_state_dict(norm_state, strict=False)
         lora_state = state.get('lora', {})
         for name, module in self.encoder.named_modules():
             if hasattr(module, 'lora_up') and hasattr(module, 'lora_down'):
@@ -184,6 +195,22 @@ class FewShotSeg(nn.Module):
                 if up_key in lora_state and down_key in lora_state:
                     module.lora_up.load_state_dict(lora_state[up_key])
                     module.lora_down.load_state_dict(lora_state[down_key])
+
+    def _build_input_adapter(self, in_channels: int) -> None:
+        adapter_channels = self.config.get('adapter_channels', in_channels)
+        conv = nn.Conv2d(in_channels, adapter_channels, kernel_size=1, bias=True)
+        self._init_channel_adapter(conv, in_channels)
+        norm = nn.BatchNorm2d(adapter_channels)
+        self.input_adapter = nn.Sequential(conv, norm)
+
+    @staticmethod
+    def _init_channel_adapter(conv: nn.Conv2d, in_channels: int) -> None:
+        with torch.no_grad():
+            nn.init.zeros_(conv.bias)
+            nn.init.zeros_(conv.weight)
+            channels = min(in_channels, conv.out_channels)
+            for idx in range(channels):
+                conv.weight[idx, idx % in_channels, 0, 0] = 1.0
 
     def get_cls(self):
         """

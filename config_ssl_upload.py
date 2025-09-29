@@ -20,6 +20,13 @@ sources_to_save = list(itertools.chain.from_iterable(
 for source_file in sources_to_save:
     ex.add_source_file(source_file)
 
+
+def _load_id_list(path: str | None) -> list[str] | None:
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, 'r', encoding='utf-8') as handle:
+        return [line.strip() for line in handle if line.strip()]
+
 @ex.config
 def cfg():
     """Default configurations"""
@@ -59,16 +66,14 @@ def cfg():
     proto_grid_size = 8
     feature_hw = [max(input_size[0] // 16, 32), max(input_size[0] // 16, 32)]
     reload_model_path = None
-    adapter_state_path = None
-    lora = 0
+    adapter_state_path = os.environ.get('STAGE1_ADAPTER_PATH')
+    lora = int(os.environ.get('STAGE2_LORA_RANK', '8'))
+    adapter_channels = 3
     use_slice_adapter = False
     adapter_layers = 1
 
-    support_txt_file = os.environ.get('SUPPORT_TILE_FILE')
-    support_id_whitelist = None
-    if support_txt_file and os.path.isfile(support_txt_file):
-        with open(support_txt_file, 'r', encoding='utf-8') as f:
-            support_id_whitelist = [line.strip() for line in f if line.strip()]
+    support_id_whitelist = _load_id_list(os.environ.get('SUPPORT_TILE_FILE'))
+    train_query_id_whitelist = _load_id_list(os.environ.get('STAGE2_TRAIN_QUERY_FILE'))
 
     model = {
         'align': usealign,
@@ -79,6 +84,7 @@ def cfg():
         'reload_model_path': reload_model_path,
         'adapter_state_path': adapter_state_path,
         'lora': lora,
+        'adapter_channels': adapter_channels,
         'use_slice_adapter': use_slice_adapter,
         'adapter_layers': adapter_layers,
         'debug': False,
